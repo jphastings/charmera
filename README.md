@@ -6,12 +6,7 @@ EXIF metadata (in pure Go) and converting AVI clips to MP4 along the way. It can
 auto-run whenever the camera is plugged in, and never imports the same shot
 twice.
 
-Install & configure auto-run with:
-
-```bash
-$ go install github.com/jphastings/charmera@latest
-$ charmera install
-```
+See [install notes](#install) below.
 
 This is a Go reimplementation of the Python
 [`kodak-charmera-exif-fixer`](https://github.com/RAIT-09/kodak-charmera-exif-fixer), extended to import into Photos, handle different SD card disk names, and deduplicate against previous imports.
@@ -72,7 +67,10 @@ xattr -d com.apple.quarantine charmera   # the binary is unsigned; clear Gatekee
 sudo mv charmera /usr/local/bin/
 ```
 
-**Or build from source** (requires [Go](https://go.dev)):
+**Or build from source.** Requires [Go](https://go.dev) **and a C toolchain**
+(Xcode Command Line Tools — run `xcode-select --install`), because the binary
+uses cgo for onnxruntime and the DiskArbitration framework. `CGO_ENABLED=0`
+won't build.
 
 ```bash
 go install github.com/jphastings/charmera@latest   # installs to $(go env GOPATH)/bin
@@ -90,15 +88,15 @@ charmera run --out ./fixed # write fixed files to a folder instead of importing
 
 Flags (for `run`):
 
-| Flag               | Default          | Description                                              |
-| ------------------ | ---------------- | ------------------------------------------------------- |
-| `--volume NAME`    | _auto-detect_    | Pin to a specific volume name (override; see Detection) |
-| `--album NAME`     | `Kodak Charmera` | Photos album to import into                              |
-| `--out DIR`        |                  | Write fixed/converted files to DIR instead of importing |
-| `--dry-run`        |                  | Show planned actions without changing anything          |
-| `--auto`           |                  | Non-interactive; exit quietly if no camera is mounted   |
+| Flag               | Default          | Description                                                             |
+| ------------------ | ---------------- | ----------------------------------------------------------------------- |
+| `--volume NAME`    | _auto-detect_    | Pin to a specific volume name (override; see Detection)                 |
+| `--album NAME`     | `Kodak Charmera` | Photos album to import into                                             |
+| `--out DIR`        |                  | Write fixed/converted files to DIR instead of importing                 |
+| `--dry-run`        |                  | Show planned actions without changing anything                          |
+| `--auto`           |                  | Non-interactive; exit quietly if no camera is mounted                   |
 | `--no-auto-rotate` |                  | Disable orientation detection (on when onnxruntime + model are present) |
-| `--no-unmount`     |                  | Leave the camera mounted when finished                  |
+| `--no-unmount`     |                  | Leave the camera mounted when finished                                  |
 
 ## Auto-launch when the camera is plugged in
 
