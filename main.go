@@ -9,6 +9,14 @@ import (
 	"github.com/jphastings/charmera/internal/cli"
 )
 
+// Build information, overridden at release time via -ldflags by GoReleaser.
+var (
+	version = "dev"
+	commit  = ""
+	date    = ""
+)
+
 func main() {
+	cli.Version, cli.Commit, cli.Date = version, commit, date
 	os.Exit(cli.Main(os.Args[1:]))
 }

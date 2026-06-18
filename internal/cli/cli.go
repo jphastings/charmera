@@ -23,6 +23,7 @@ Usage:
   charmera [run] [flags]    Detect the camera and process its media (default)
   charmera install [flags]  Auto-run when the camera is plugged in (LaunchAgent)
   charmera uninstall        Remove the LaunchAgent
+  charmera version          Print the version
   charmera help             Show this help
 
 Run flags:
@@ -35,6 +36,13 @@ Run flags:
 Install flags:
   --volume NAME   Pin the watch to a specific volume (default: watch /Volumes)
 `
+
+// Build information, set from main at build time (injected by GoReleaser).
+var (
+	Version = "dev"
+	Commit  = ""
+	Date    = ""
+)
 
 // Main is the program entry point. It returns a process exit code.
 func Main(args []string) int {
@@ -51,6 +59,9 @@ func Main(args []string) int {
 		return installCmd(rest)
 	case "uninstall":
 		return uninstallCmd()
+	case "version", "--version":
+		fmt.Println(versionString())
+		return 0
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return 0
@@ -58,6 +69,17 @@ func Main(args []string) int {
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", cmd, usage)
 		return 2
 	}
+}
+
+func versionString() string {
+	s := "charmera " + Version
+	if Commit != "" {
+		s += " (" + Commit + ")"
+	}
+	if Date != "" {
+		s += ", built " + Date
+	}
+	return s
 }
 
 func runCmd(args []string) int {

@@ -9,8 +9,8 @@ twice.
 Install & configure auto-run with:
 
 ```bash
-$ go install github.com/jphastings/charmera-go@latest
-$ charmera-go install
+$ go install github.com/jphastings/charmera@latest
+$ charmera install
 ```
 
 This is a Go reimplementation of the Python
@@ -49,9 +49,21 @@ For each file on the camera, in one pass:
 
 ## Install
 
-Requires [Go](https://go.dev) to build and [`ffmpeg`](https://ffmpeg.org)
-(`brew install ffmpeg`) only if you have AVI videos to convert. EXIF fixing and
-Photos import have no external dependencies.
+[`ffmpeg`](https://ffmpeg.org) is needed only if you have AVI videos to convert
+(`brew install ffmpeg`); EXIF fixing and Photos import have no external
+dependencies.
+
+**Download a release** (no Go toolchain required) — grab the macOS archive from
+the [Releases](https://github.com/jphastings/charmera/releases) page (a single
+universal binary for Intel and Apple Silicon), then:
+
+```bash
+tar -xzf charmera_*_darwin_all.tar.gz
+xattr -d com.apple.quarantine charmera   # the binary is unsigned; clear Gatekeeper
+sudo mv charmera /usr/local/bin/
+```
+
+**Or build from source** (requires [Go](https://go.dev)):
 
 ```bash
 go install github.com/jphastings/charmera@latest   # installs to $(go env GOPATH)/bin
