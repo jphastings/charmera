@@ -155,17 +155,28 @@ func preprocess(src image.Image, dst []float32) {
 	}
 }
 
-// argmaxSoftmax returns the highest-scoring class index and its softmax
-// probability.
+// class180 (rotate 180°) is treated as impossible: a hand-held camera is
+// essentially never upside-down, so excluding it avoids spurious 180° flips and
+// concentrates probability on the plausible orientations.
+const class180 = 2
+
+// argmaxSoftmax returns the highest-scoring plausible class and its softmax
+// probability, renormalised as if the 180° class did not exist.
 func argmaxSoftmax(logits []float32) (int, float64) {
-	maxIdx, maxLogit := 0, logits[0]
+	maxIdx, maxLogit := -1, float32(0)
 	for i, v := range logits {
-		if v > maxLogit {
+		if i == class180 {
+			continue
+		}
+		if maxIdx == -1 || v > maxLogit {
 			maxIdx, maxLogit = i, v
 		}
 	}
 	var sum float64
-	for _, v := range logits {
+	for i, v := range logits {
+		if i == class180 {
+			continue
+		}
 		sum += math.Exp(float64(v - maxLogit))
 	}
 	return maxIdx, 1.0 / sum

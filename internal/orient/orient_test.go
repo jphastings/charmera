@@ -18,6 +18,19 @@ func TestArgmaxSoftmax(t *testing.T) {
 	}
 }
 
+func TestArgmaxSoftmax_Never180(t *testing.T) {
+	// Even when the 180° class dominates the logits, it must never be selected,
+	// nor counted in the confidence denominator.
+	idx, conf := argmaxSoftmax([]float32{1, 0, 5, 0})
+	if idx == class180 || classToOrientation[idx] == 3 {
+		t.Errorf("180° must never be selected, got class %d", idx)
+	}
+	// Renormalised over {0,1,3}: class 0 wins with exp(1)/(exp(1)+exp(0)+exp(0)).
+	if conf < 0.5 {
+		t.Errorf("confidence should be renormalised over plausible classes, got %.3f", conf)
+	}
+}
+
 func TestClassMapping(t *testing.T) {
 	// 0°->1 (normal), 90°CW->6, 180°->3, 90°CCW->8.
 	want := [4]int{1, 6, 3, 8}

@@ -140,9 +140,10 @@ location first (e.g. `go install`, or copy it to `/usr/local/bin`) and re-run
 - **Orientation (optional, local ML).** When onnxruntime is installed, each
   photo is run through the [deep-image-orientation-detection](https://huggingface.co/DuarteBarbosa/deep-image-orientation-detection)
   EfficientNetV2 model (downloaded once, run locally via onnxruntime) to predict
-  0°/90°/180°/270°. A rotation is written to the EXIF Orientation tag only when
-  that rotation wins an outright majority (≥ 0.50), so an already-upright photo
-  is never flipped.
+  0°/90°/180°/270°. The 180° case is treated as impossible — a hand-held camera
+  is never upside-down — so its probability is dropped and the rest renormalised.
+  A rotation is written to the EXIF Orientation tag only when it then wins an
+  outright majority (≥ 0.50), so an already-upright photo is never flipped.
 - **Video.** `ffmpeg` transcodes to H.264 (CRF 18) + AAC, stamping
   `creation_time` from the file's modification time (the embedded date is wrong).
 - **Unmount.** When finished, the camera volume is unmounted via the
