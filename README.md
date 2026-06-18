@@ -1,8 +1,8 @@
 # charmera
 
-A macOS command-line tool that imports [Kodak Charmera](https://www.kodak.com/en/consumer/product/cameras/digital/charmera-keychain-digital-camera/)
+A macOS command-line tool & daemon that imports [Kodak Charmera](https://www.kodak.com/en/consumer/product/cameras/digital/charmera-keychain-digital-camera/)
 toy-camera photos and videos into the **Photos** app — repairing their broken
-EXIF metadata (in pure Go) and converting AVI clips to MP4 along the way. It can
+EXIF metadata (in pure Go) plus optionally converting AVI clips to MP4 along the way. It can
 auto-run whenever the camera is plugged in, and never imports the same shot
 twice.
 
@@ -141,7 +141,8 @@ location first (e.g. `go install`, or copy it to `/usr/local/bin`) and re-run
   photo is run through the [deep-image-orientation-detection](https://huggingface.co/DuarteBarbosa/deep-image-orientation-detection)
   EfficientNetV2 model (downloaded once, run locally via onnxruntime) to predict
   0°/90°/180°/270°. A rotation is written to the EXIF Orientation tag only when
-  the model is confident (≥ 0.90), so an already-upright photo is never flipped.
+  that rotation wins an outright majority (≥ 0.50), so an already-upright photo
+  is never flipped.
 - **Video.** `ffmpeg` transcodes to H.264 (CRF 18) + AAC, stamping
   `creation_time` from the file's modification time (the embedded date is wrong).
 - **Unmount.** When finished, the camera volume is unmounted via the

@@ -31,8 +31,10 @@ type Config struct {
 	Album string
 
 	// OrientationMinConfidence is the softmax probability the orientation model
-	// must reach before charmera rewrites a photo's Orientation tag. Kept high so
-	// a confident wrong guess can't rotate an already-upright photo.
+	// must reach before charmera rewrites a photo's Orientation tag. 0.5 means a
+	// rotation is applied only when it wins an outright majority over "already
+	// upright" — high enough to avoid flipping correct photos, low enough to act
+	// on the model's (less confident, but correct) calls on lo-fi camera images.
 	OrientationMinConfidence float64
 
 	// ffmpeg transcode settings, used when an AVI is converted to MP4.
@@ -64,7 +66,7 @@ func Default() Config {
 		FFmpegPreset:       "medium",
 		FFmpegAudioBitrate: "128k",
 
-		OrientationMinConfidence: 0.90,
+		OrientationMinConfidence: 0.50,
 	}
 }
 
