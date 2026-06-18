@@ -27,6 +27,15 @@ jobs:
       - name: Test
         run: go test ./...
 
+      # quill code-signs/notarizes the universal binary. Best-effort: if it
+      # can't be installed the release still publishes (unsigned) — see
+      # scripts/macos-sign.sh.
+      - name: Install quill
+        continue-on-error: true
+        run: |
+          go install github.com/anchore/quill/cmd/quill@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
       - name: Release
         uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89 # v7.2.2
         with:
@@ -34,3 +43,15 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Add these as repository secrets to enable Developer ID signing +
+          # notarization (until then the binary is ad-hoc signed only):
+          #   QUILL_SIGN_P12        base64 of the Developer ID Application .p12
+          #   QUILL_SIGN_PASSWORD   password for that .p12
+          #   QUILL_NOTARY_KEY      base64 of the App Store Connect API .p8
+          #   QUILL_NOTARY_KEY_ID   the API key's Key ID
+          #   QUILL_NOTARY_ISSUER   the API key's Issuer ID
+          QUILL_SIGN_P12: ${{ secrets.QUILL_SIGN_P12 }}
+          QUILL_SIGN_PASSWORD: ${{ secrets.QUILL_SIGN_PASSWORD }}
+          QUILL_NOTARY_KEY: ${{ secrets.QUILL_NOTARY_KEY }}
+          QUILL_NOTARY_KEY_ID: ${{ secrets.QUILL_NOTARY_KEY_ID }}
+          QUILL_NOTARY_ISSUER: ${{ secrets.QUILL_NOTARY_ISSUER }}

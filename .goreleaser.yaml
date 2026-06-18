@@ -38,9 +38,14 @@ builds:
       - -X main.date={{ .CommitDate }}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
-# Ship a single universal binary that runs on both Intel and Apple Silicon.
+# Ship a single universal binary that runs on both Intel and Apple Silicon,
+# code-signed and (when credentials are configured) notarized via quill.
 universal_binaries:
   - replace: true
+    hooks:
+      post:
+        - cmd: bash scripts/macos-sign.sh "{{ .Path }}"
+          output: true
 
 archives:
   - formats: [tar.gz]
