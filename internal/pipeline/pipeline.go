@@ -33,6 +33,12 @@ type PhotoImporter interface {
 	Import(ctx context.Context, paths []string) error
 }
 
+// OrientationDetector suggests an EXIF Orientation (1, 3, 6 or 8) for a photo
+// from its pixels, with a confidence. Optional; nil disables auto-rotation.
+type OrientationDetector interface {
+	DetectJPEG(data []byte) (orientation int, confidence float64, err error)
+}
+
 // Event is a progress notification emitted during a run.
 type Event struct {
 	Phase  string // scan, skip, fix, convert, import, warn, error, done
@@ -62,6 +68,12 @@ type Options struct {
 	OutDir   string
 	DryRun   bool     // report planned actions without changing anything
 	Observer Observer // progress sink
+
+	// Detector, when non-nil, suggests an EXIF Orientation per photo. A
+	// suggestion is applied only when it differs from "normal" and its
+	// confidence reaches MinConfidence.
+	Detector      OrientationDetector
+	MinConfidence float64
 }
 
 // importing reports whether this run imports into Photos (vs. writing to OutDir).
@@ -232,7 +244,10 @@ func (p *Pipeline) fixPhoto(f scan.File, targetDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	fixed, res, err := exiffix.Fix(data, f.ModTime)
+
+	orientation := p.detectOrientation(data, f.Name)
+
+	fixed, res, err := exiffix.FixWithOrientation(data, f.ModTime, orientation)
 	if err != nil {
 		return "", err
 	}
@@ -243,8 +258,25 @@ func (p *Pipeline) fixPhoto(f scan.File, targetDir string) (string, error) {
 	if err := os.Chtimes(out, f.ModTime, f.ModTime); err != nil {
 		return "", err
 	}
-	p.emit(Event{Phase: "fix", Name: f.Name, Detail: fmt.Sprintf("%dx%d date=%s(%s)", res.Width, res.Height, res.DateTime, res.DateSource)})
+	p.emit(Event{Phase: "fix", Name: f.Name, Detail: fmt.Sprintf("%dx%d date=%s(%s) orient=%d", res.Width, res.Height, res.DateTime, res.DateSource, res.Orientation)})
 	return out, nil
+}
+
+// detectOrientation returns an EXIF Orientation override (0 = none) from the
+// detector, applied only when it confidently suggests a rotation.
+func (p *Pipeline) detectOrientation(data []byte, name string) int {
+	if p.opts.Detector == nil {
+		return 0
+	}
+	orientation, confidence, err := p.opts.Detector.DetectJPEG(data)
+	if err != nil {
+		p.emit(Event{Phase: "warn", Name: name, Detail: "orientation detection failed: " + err.Error()})
+		return 0
+	}
+	if orientation == 1 || confidence < p.opts.MinConfidence {
+		return 0 // already upright, or not confident enough to rotate
+	}
+	return orientation
 }
 
 func (p *Pipeline) convertVideo(ctx context.Context, f scan.File, targetDir string) (string, error) {

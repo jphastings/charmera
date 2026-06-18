@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -252,3 +253,53 @@ func TestRun_DryRunChangesNothing(t *testing.T) {
 type errMissing string
 
 func (e errMissing) Error() string { return string(e) + " missing" }
+
+// fakeDetector returns a fixed orientation/confidence for every photo.
+type fakeDetector struct {
+	orientation int
+	confidence  float64
+}
+
+func (f fakeDetector) DetectJPEG([]byte) (int, float64, error) {
+	return f.orientation, f.confidence, nil
+}
+
+func fixOrientation(t *testing.T, det OrientationDetector, minConf float64) string {
+	t.Helper()
+	cfg, volume, dcim := setup(t)
+	if err := os.WriteFile(filepath.Join(dcim, "PICT0001.jpg"), realJPEG(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var fixDetail string
+	obs := func(e Event) {
+		if e.Phase == "fix" {
+			fixDetail = e.Detail
+		}
+	}
+	_, err := New(cfg, volume, &fakeConverter{}, &fakeImporter{}, Options{
+		OutDir: filepath.Join(t.TempDir(), "out"), Observer: obs,
+		Detector: det, MinConfidence: minConf,
+	}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fixDetail
+}
+
+func TestRun_AppliesConfidentRotation(t *testing.T) {
+	if got := fixOrientation(t, fakeDetector{orientation: 8, confidence: 0.95}, 0.90); !strings.Contains(got, "orient=8") {
+		t.Errorf("expected detected orientation 8 to be applied, got %q", got)
+	}
+}
+
+func TestRun_IgnoresLowConfidenceRotation(t *testing.T) {
+	if got := fixOrientation(t, fakeDetector{orientation: 8, confidence: 0.50}, 0.90); !strings.Contains(got, "orient=1") {
+		t.Errorf("low-confidence rotation should be ignored (orient=1), got %q", got)
+	}
+}
+
+func TestRun_IgnoresUprightPrediction(t *testing.T) {
+	if got := fixOrientation(t, fakeDetector{orientation: 1, confidence: 0.99}, 0.90); !strings.Contains(got, "orient=1") {
+		t.Errorf("upright prediction should leave orient=1, got %q", got)
+	}
+}

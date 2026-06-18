@@ -14,6 +14,7 @@ import (
 	"github.com/jphastings/charmera/internal/pipeline"
 	"github.com/jphastings/charmera/internal/scan"
 	"github.com/jphastings/charmera/internal/video"
+	"github.com/jphastings/charmera/internal/volume"
 )
 
 const usage = `charmera — import Kodak Charmera photos & videos into macOS Photos,
@@ -27,11 +28,14 @@ Usage:
   charmera help             Show this help
 
 Run flags:
-  --volume NAME   Pin to a specific volume name (default: auto-detect)
-  --album NAME    Photos album to import into (default "Kodak Charmera")
-  --out DIR       Write fixed/converted files to DIR instead of importing
-  --dry-run       Show what would happen without changing anything
-  --auto          Non-interactive; exit quietly if no camera is mounted
+  --volume NAME    Pin to a specific volume name (default: auto-detect)
+  --album NAME     Photos album to import into (default "Kodak Charmera")
+  --out DIR        Write fixed/converted files to DIR instead of importing
+  --dry-run        Show what would happen without changing anything
+  --auto           Non-interactive; exit quietly if no camera is mounted
+  --no-auto-rotate Disable content-based orientation detection (on when
+                   onnxruntime + the model are available)
+  --no-unmount     Leave the camera mounted when finished (it unmounts by default)
 
 Install flags:
   --volume NAME   Pin the watch to a specific volume (default: watch /Volumes)
@@ -86,19 +90,21 @@ func runCmd(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	var (
-		volume = fs.String("volume", "", "pin to a specific volume name")
-		album  = fs.String("album", "", "Photos album to import into")
-		out    = fs.String("out", "", "write fixed files to DIR instead of importing")
-		dryRun = fs.Bool("dry-run", false, "preview without changing anything")
-		auto   = fs.Bool("auto", false, "non-interactive; exit quietly if no camera")
+		volumeName   = fs.String("volume", "", "pin to a specific volume name")
+		album        = fs.String("album", "", "Photos album to import into")
+		out          = fs.String("out", "", "write fixed files to DIR instead of importing")
+		dryRun       = fs.Bool("dry-run", false, "preview without changing anything")
+		auto         = fs.Bool("auto", false, "non-interactive; exit quietly if no camera")
+		noAutoRotate = fs.Bool("no-auto-rotate", false, "disable content-based orientation detection")
+		noUnmount    = fs.Bool("no-unmount", false, "don't unmount the camera when finished")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
 	cfg := config.Default()
-	if *volume != "" {
-		cfg.VolumeName = *volume
+	if *volumeName != "" {
+		cfg.VolumeName = *volumeName
 	}
 	if *album != "" {
 		cfg.Album = *album
@@ -113,11 +119,20 @@ func runCmd(args []string) int {
 		return 1
 	}
 
-	p := pipeline.New(cfg, volumePath, video.New(cfg), photos.New(cfg.Album), pipeline.Options{
-		OutDir:   *out,
-		DryRun:   *dryRun,
-		Observer: textObserver(os.Stdout),
-	})
+	opts := pipeline.Options{
+		OutDir:        *out,
+		DryRun:        *dryRun,
+		Observer:      textObserver(os.Stdout),
+		MinConfidence: cfg.OrientationMinConfidence,
+	}
+	if !*noAutoRotate && !*dryRun {
+		if detector, closeFn := newDetector(cfg); detector != nil {
+			opts.Detector = detector
+			defer closeFn()
+		}
+	}
+
+	p := pipeline.New(cfg, volumePath, video.New(cfg), photos.New(cfg.Album), opts)
 
 	sum, err := p.Run(context.Background())
 	printSummary(os.Stdout, sum, *dryRun)
@@ -125,6 +140,16 @@ func runCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
+
+	// Unmount the camera once we're done reading from it (real runs only).
+	if !*dryRun && !*noUnmount {
+		if uerr := volume.Unmount(volumePath); uerr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not unmount %s: %v\n", volumePath, uerr)
+		} else {
+			fmt.Printf("Unmounted %s\n", volumePath)
+		}
+	}
+
 	if sum.Failed > 0 {
 		return 1
 	}

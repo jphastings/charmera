@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # macOS runner: the binary uses cgo (onnxruntime), and the universal build
+    # cross-compiles amd64 from this arm64 runner via clang.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -20,11 +22,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # exiftool/ffmpeg let the EXIF-validation and transcode tests actually run
-      # (they skip gracefully when absent); the Photos tests are string-only.
-      - name: Install test dependencies
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg libimage-exiftool-perl
-
+      # Tests that need ffmpeg/exiftool/onnxruntime skip gracefully when those
+      # aren't installed; this gate covers the build and the pure-Go logic.
       - name: Test
         run: go test ./...
 

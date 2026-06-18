@@ -30,6 +30,11 @@ type Config struct {
 	// Album is the Photos album imported media is added to (created if absent).
 	Album string
 
+	// OrientationMinConfidence is the softmax probability the orientation model
+	// must reach before charmera rewrites a photo's Orientation tag. Kept high so
+	// a confident wrong guess can't rotate an already-upright photo.
+	OrientationMinConfidence float64
+
 	// ffmpeg transcode settings, used when an AVI is converted to MP4.
 	FFmpegVideoCodec   string
 	FFmpegAudioCodec   string
@@ -58,7 +63,14 @@ func Default() Config {
 		FFmpegCRF:          18,
 		FFmpegPreset:       "medium",
 		FFmpegAudioBitrate: "128k",
+
+		OrientationMinConfidence: 0.90,
 	}
+}
+
+// ModelDir is where downloaded ML models are cached.
+func (c Config) ModelDir() string {
+	return filepath.Join(c.StateDir, "models")
 }
 
 // VolumePath is the absolute mount path of the camera.

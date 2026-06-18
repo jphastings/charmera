@@ -43,15 +43,24 @@ For each file on the camera, in one pass:
    renumbers files).
 2. **Fix** photo EXIF (pure Go) or **convert** AVI → MP4 (via `ffmpeg`) into a
    temporary staging area, named `IMG_YYYYMMDD_HHMMSS_<hash>.jpg` / `VID_…​.mp4`.
-3. **Import** the fixed files into a Photos album (default: *Kodak Charmera*).
-4. **Delete** the staged copy — Photos holds the only copy. There's no separate
+3. **Auto-rotate** (optional) — detect each photo's orientation with a local ML
+   model and set the EXIF Orientation tag so it shows upright in Photos.
+4. **Import** the fixed files into a Photos album (default: *Kodak Charmera*).
+5. **Delete** the staged copy — Photos holds the only copy. There's no separate
    database, so deleting a photo from the album re-enables its import next run.
+6. **Unmount** the camera when finished, so you can unplug it safely.
 
 ## Install
 
-[`ffmpeg`](https://ffmpeg.org) is needed only if you have AVI videos to convert
-(`brew install ffmpeg`); EXIF fixing and Photos import have no external
-dependencies.
+Optional, all via Homebrew:
+
+- [`ffmpeg`](https://ffmpeg.org) (`brew install ffmpeg`) — only if you have AVI
+  videos to convert.
+- [`onnxruntime`](https://onnxruntime.ai) (`brew install onnxruntime`) — enables
+  the orientation auto-rotate feature; the model itself (~77 MB) is downloaded
+  automatically on first use.
+
+EXIF fixing and Photos import need neither.
 
 **Download a release** (no Go toolchain required) — grab the macOS archive from
 the [Releases](https://github.com/jphastings/charmera/releases) page (a single
@@ -81,13 +90,15 @@ charmera run --out ./fixed # write fixed files to a folder instead of importing
 
 Flags (for `run`):
 
-| Flag            | Default          | Description                                             |
-| --------------- | ---------------- | ------------------------------------------------------- |
-| `--volume NAME` | _auto-detect_    | Pin to a specific volume name (override; see Detection) |
-| `--album NAME`  | `Kodak Charmera` | Photos album to import into                             |
-| `--out DIR`     |                  | Write fixed/converted files to DIR instead of importing |
-| `--dry-run`     |                  | Show planned actions without changing anything          |
-| `--auto`        |                  | Non-interactive; exit quietly if no camera is mounted   |
+| Flag               | Default          | Description                                              |
+| ------------------ | ---------------- | ------------------------------------------------------- |
+| `--volume NAME`    | _auto-detect_    | Pin to a specific volume name (override; see Detection) |
+| `--album NAME`     | `Kodak Charmera` | Photos album to import into                              |
+| `--out DIR`        |                  | Write fixed/converted files to DIR instead of importing |
+| `--dry-run`        |                  | Show planned actions without changing anything          |
+| `--auto`           |                  | Non-interactive; exit quietly if no camera is mounted   |
+| `--no-auto-rotate` |                  | Disable orientation detection (on when onnxruntime + model are present) |
+| `--no-unmount`     |                  | Leave the camera mounted when finished                  |
 
 ## Auto-launch when the camera is plugged in
 
@@ -128,8 +139,15 @@ location first (e.g. `go install`, or copy it to `/usr/local/bin`) and re-run
 - **Camera identity.** The rebuilt EXIF also stamps the camera's published
   details: Make *Kodak*, Model *Charmera*, and the fixed lens (35 mm-equivalent,
   f/2.4).
+- **Orientation (optional, local ML).** When onnxruntime is installed, each
+  photo is run through the [deep-image-orientation-detection](https://huggingface.co/DuarteBarbosa/deep-image-orientation-detection)
+  EfficientNetV2 model (downloaded once, run locally via onnxruntime) to predict
+  0°/90°/180°/270°. A rotation is written to the EXIF Orientation tag only when
+  the model is confident (≥ 0.90), so an already-upright photo is never flipped.
 - **Video.** `ffmpeg` transcodes to H.264 (CRF 18) + AAC, stamping
   `creation_time` from the file's modification time (the embedded date is wrong).
+- **Unmount.** When finished, the camera volume is unmounted via the
+  DiskArbitration framework (`--no-unmount` to skip).
 - **Dedup (Photos is the source of truth).** Each camera file is hashed
   (SHA-256) and the first 16 hex chars are embedded in the imported filename.
   Before importing, charmera asks Photos for the album's existing filenames and

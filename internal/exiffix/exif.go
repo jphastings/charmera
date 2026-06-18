@@ -35,6 +35,14 @@ type Result struct {
 // date (falling back to the supplied time when no usable EXIF date exists), and
 // returns the corrected JPEG bytes.
 func Fix(data []byte, fallback time.Time) ([]byte, Result, error) {
+	return FixWithOrientation(data, fallback, 0)
+}
+
+// FixWithOrientation is like Fix but, when orientationOverride is a valid EXIF
+// Orientation value (1, 3, 6 or 8), uses it instead of the source's orientation.
+// This is how a content-based orientation detector feeds its result in. An
+// override of 0 means "no override" (use the source orientation, else normal).
+func FixWithOrientation(data []byte, fallback time.Time, orientationOverride int) ([]byte, Result, error) {
 	layout, err := scanJPEG(data)
 	if err != nil {
 		return nil, Result{}, err
@@ -53,6 +61,9 @@ func Fix(data []byte, fallback time.Time) ([]byte, Result, error) {
 
 	dateTime, source := pickDate(info, fallback)
 	orientation := info.orientation
+	if orientationOverride > 0 {
+		orientation = orientationOverride
+	}
 	if orientation < 1 {
 		orientation = 1
 	}

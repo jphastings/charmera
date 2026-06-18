@@ -7,16 +7,28 @@ before:
     - go mod tidy
 
 builds:
+  # cgo is required for the onnxruntime binding (orientation detection), so the
+  # release must be built on macOS. amd64 is cross-compiled from the arm64
+  # runner by pointing clang at each architecture.
   - main: .
     binary: charmera
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
     # macOS-only: the tool drives the Photos app and assumes /Volumes.
     goos:
       - darwin
     goarch:
       - amd64
       - arm64
+    overrides:
+      - goos: darwin
+        goarch: amd64
+        env:
+          - CC=clang -arch x86_64
+      - goos: darwin
+        goarch: arm64
+        env:
+          - CC=clang -arch arm64
     flags:
       - -trimpath
     ldflags:
