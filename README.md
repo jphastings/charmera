@@ -144,7 +144,7 @@ location first (e.g. `go install`, or copy it to `/usr/local/bin`) and re-run
   is never upside-down — so its probability is dropped and the rest renormalised.
   A rotation is written to the EXIF Orientation tag only when it then wins an
   outright majority (≥ 0.50), so an already-upright photo is never flipped.
-- **Video.** `ffmpeg` transcodes to H.264 (CRF 18) + AAC, stamping
+- **Video.** `ffmpeg` transcodes to H.264 (CRF 26) + AAC, stamping
   `creation_time` from the file's modification time (the embedded date is wrong).
 - **Unmount.** When finished, the camera volume is unmounted via the
   DiskArbitration framework (`--no-unmount` to skip).

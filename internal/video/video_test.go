@@ -22,7 +22,7 @@ func TestBuildArgs_UsesConfigAndCreationTime(t *testing.T) {
 	for _, want := range []string{
 		"-i in.avi",
 		"-c:v libx264",
-		"-crf 18",
+		"-crf 26",
 		"-preset medium",
 		"-c:a aac",
 		"-b:a 128k",

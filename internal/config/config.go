@@ -62,7 +62,7 @@ func Default() Config {
 		Album:              "Kodak Charmera",
 		FFmpegVideoCodec:   "libx264",
 		FFmpegAudioCodec:   "aac",
-		FFmpegCRF:          18,
+		FFmpegCRF:          26,
 		FFmpegPreset:       "medium",
 		FFmpegAudioBitrate: "128k",
 
