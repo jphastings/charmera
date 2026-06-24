@@ -94,3 +94,15 @@ func (c Config) DCIMPath() string {
 func (c Config) StagingDir() string {
 	return filepath.Join(c.StateDir, "staging")
 }
+
+// SocketPath is the Unix-domain socket the daemon listens on and the menu app
+// connects to.
+func (c Config) SocketPath() string {
+	return filepath.Join(c.StateDir, "daemon.sock")
+}
+
+// StatePath is where the daemon persists settings that must survive restarts
+// (currently just the pause flag).
+func (c Config) StatePath() string {
+	return filepath.Join(c.StateDir, "state.json")
+}

@@ -1,10 +1,16 @@
 # charmera
 
-A macOS command-line tool & daemon that imports [Kodak Charmera](https://www.kodak.com/en/consumer/product/cameras/digital/charmera-keychain-digital-camera/)
+A macOS command-line tool, background daemon, and menu-bar app that import
+[Kodak Charmera](https://www.kodak.com/en/consumer/product/cameras/digital/charmera-keychain-digital-camera/)
 toy-camera photos and videos into the **Photos** app — repairing their broken
 EXIF metadata (in pure Go) plus optionally converting AVI clips to MP4 along the way. It can
 auto-run whenever the camera is plugged in, and never imports the same shot
 twice.
+
+A small **menu-bar app** (shipped as `Charmera.app`, with the CLI bundled
+inside) shows whether the camera is connected and importing, and lets you pause
+importing with one click. The actual work is done by a background **daemon**, so
+the app needn't stay open.
 
 See [install notes](#install) below.
 
@@ -57,9 +63,17 @@ Optional, all via Homebrew:
 
 EXIF fixing and Photos import need neither.
 
-**Download a release** (no Go toolchain required) — grab the macOS archive from
-the [Releases](https://github.com/jphastings/charmera/releases) page (a single
-universal binary for Intel and Apple Silicon), then:
+**The menu-bar app (recommended).** Download `Charmera_*_darwin_universal.zip`
+from the [Releases](https://github.com/jphastings/charmera/releases) page, unzip
+it, and drag **Charmera.app** to `/Applications`. Launch it once: it puts a
+camera icon in the menu bar and sets itself up to import automatically (at login
+and whenever the camera is plugged in). The CLI is bundled inside the app, so
+there's nothing else to install. The app can be quit at any time — importing
+continues in the background.
+
+**Download the CLI on its own** (no Go toolchain required) — grab the macOS
+archive from the [Releases](https://github.com/jphastings/charmera/releases)
+page (a single universal binary for Intel and Apple Silicon), then:
 
 ```bash
 tar -xzf charmera_*_darwin_all.tar.gz
@@ -98,21 +112,39 @@ Flags (for `run`):
 | `--no-auto-rotate` |                  | Disable orientation detection (on when onnxruntime + model are present) |
 | `--no-unmount`     |                  | Leave the camera mounted when finished                                  |
 
-## Auto-launch when the camera is plugged in
+## Background daemon
+
+Instead of running by hand, charmera can run as a background daemon that watches
+for the camera, imports automatically on detection, and exposes its state to the
+menu-bar app:
 
 ```bash
-charmera install     # registers a LaunchAgent that watches /Volumes
-charmera uninstall   # removes it
+charmera daemon      # run in the foreground (normally started by the LaunchAgent)
+charmera status      # print the running daemon's state
+charmera pause       # stop importing when the camera is plugged in
+charmera resume      # import on detection again
 ```
 
-The agent watches `/Volumes` (not a fixed name), so it fires whenever *any*
-volume is mounted; each time, charmera detects the Charmera by signature and
-exits quietly if it isn't the one. Pin it to a single volume with
-`charmera install --volume NAME` if you prefer.
+`pause` is remembered across restarts. The menu-bar app is just a friendlier
+front-end for `status` and `pause`/`resume`.
 
-`install` records the path of the `charmera` binary, so install it to a stable
-location first (e.g. `go install`, or copy it to `/usr/local/bin`) and re-run
-`install` if you move it. Logs are written to `~/Library/Logs/charmera.*.log`.
+## Auto-launch at login
+
+```bash
+charmera install     # start the daemon now and at every login (LaunchAgent)
+charmera uninstall   # stop it and remove the LaunchAgent
+```
+
+`install` registers a `KeepAlive` LaunchAgent (`com.charmera.daemon`) that keeps
+the daemon running and relaunches it if it exits. The daemon watches `/Volumes`
+itself and detects the Charmera by signature, so it works no matter what the
+card is named; pin it to one volume with `charmera install --volume NAME` if you
+prefer. (Installing **Charmera.app** does this for you on first launch.)
+
+`install` records the path of the running `charmera` binary, so install it to a
+stable location first (e.g. `go install`, copy it to `/usr/local/bin`, or use the
+copy inside Charmera.app) and re-run `install` if you move it. Logs are written
+to `~/Library/Logs/charmera.*.log`.
 
 ### Permissions
 

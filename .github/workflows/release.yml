@@ -55,3 +55,21 @@ jobs:
           QUILL_NOTARY_KEY: ${{ secrets.QUILL_NOTARY_KEY }}
           QUILL_NOTARY_KEY_ID: ${{ secrets.QUILL_NOTARY_KEY_ID }}
           QUILL_NOTARY_ISSUER: ${{ secrets.QUILL_NOTARY_ISSUER }}
+
+      # Build the menu-bar app with the CLI bundled inside it, sign + notarize
+      # the whole .app (reusing the same Developer ID/notary secrets), and attach
+      # it to the release. Without secrets the .app is ad-hoc signed (not
+      # notarized), mirroring the bare-binary behaviour above.
+      - name: Build & notarize Charmera.app
+        env:
+          QUILL_SIGN_P12: ${{ secrets.QUILL_SIGN_P12 }}
+          QUILL_SIGN_PASSWORD: ${{ secrets.QUILL_SIGN_PASSWORD }}
+          QUILL_NOTARY_KEY: ${{ secrets.QUILL_NOTARY_KEY }}
+          QUILL_NOTARY_KEY_ID: ${{ secrets.QUILL_NOTARY_KEY_ID }}
+          QUILL_NOTARY_ISSUER: ${{ secrets.QUILL_NOTARY_ISSUER }}
+        run: VERSION="${GITHUB_REF_NAME}" DIST=appdist scripts/make-app.sh
+
+      - name: Attach Charmera.app to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" appdist/Charmera_*_darwin_universal.zip --clobber

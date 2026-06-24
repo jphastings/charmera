@@ -7,8 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/jphastings/charmera/internal/config"
+	"github.com/jphastings/charmera/internal/daemon"
 	"github.com/jphastings/charmera/internal/launchagent"
 	"github.com/jphastings/charmera/internal/photos"
 	"github.com/jphastings/charmera/internal/pipeline"
@@ -22,7 +26,11 @@ fixing their broken EXIF and converting AVI to MP4 along the way.
 
 Usage:
   charmera [run] [flags]    Detect the camera and process its media (default)
-  charmera install [flags]  Auto-run when the camera is plugged in (LaunchAgent)
+  charmera daemon [flags]   Run in the background, importing on detection
+  charmera status           Print the running daemon's current state
+  charmera pause            Tell the daemon to stop importing on detection
+  charmera resume           Tell the daemon to import on detection again
+  charmera install [flags]  Start the daemon at login (LaunchAgent)
   charmera uninstall        Remove the LaunchAgent
   charmera version          Print the version
   charmera help             Show this help
@@ -37,8 +45,13 @@ Run flags:
                    onnxruntime + the model are available)
   --no-unmount     Leave the camera mounted when finished (it unmounts by default)
 
+Daemon flags:
+  --volume NAME    Pin to a specific volume name (default: auto-detect)
+  --album NAME     Photos album to import into (default "Kodak Charmera")
+  --no-unmount     Leave the camera mounted after each import
+
 Install flags:
-  --volume NAME   Pin the watch to a specific volume (default: watch /Volumes)
+  --volume NAME    Pin the daemon to a specific volume (default: auto-detect)
 `
 
 // Build information, set from main at build time (injected by GoReleaser).
@@ -59,6 +72,14 @@ func Main(args []string) int {
 	switch cmd {
 	case "run":
 		return runCmd(rest)
+	case "daemon":
+		return daemonCmd(rest)
+	case "status":
+		return statusCmd()
+	case "pause":
+		return controlCmd(daemon.CmdPause)
+	case "resume":
+		return controlCmd(daemon.CmdResume)
 	case "install":
 		return installCmd(rest)
 	case "uninstall":
@@ -159,30 +180,99 @@ func runCmd(args []string) int {
 func installCmd(args []string) int {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	volume := fs.String("volume", "", "camera volume name to watch")
+	volumeName := fs.String("volume", "", "pin the daemon to a specific volume name")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
-	cfg := config.Default()
-	if *volume != "" {
-		cfg.VolumeName = *volume
+	exe, err := launchagent.CurrentExe()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
+		return 1
 	}
 
-	// Watch /Volumes (not a specific name) so the agent fires on any mount; a
-	// pinned --volume narrows the watch to that path.
-	watchPath := cfg.VolumesDir
-	if cfg.VolumeName != "" {
-		watchPath = cfg.VolumePath()
-	}
-
-	path, err := launchagent.Install(watchPath)
+	path, err := launchagent.Install(exe, *volumeName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
 		return 1
 	}
 	fmt.Printf("LaunchAgent installed: %s\n", path)
-	fmt.Printf("charmera will run automatically when the camera is plugged in (watching %s).\n", watchPath)
+	fmt.Println("The charmera daemon will start at login and import automatically when the camera is plugged in.")
+	return 0
+}
+
+func daemonCmd(args []string) int {
+	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	var (
+		volumeName = fs.String("volume", "", "pin to a specific volume name")
+		album      = fs.String("album", "", "Photos album to import into")
+		noUnmount  = fs.Bool("no-unmount", false, "leave the camera mounted after each import")
+	)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	cfg := config.Default()
+	if *volumeName != "" {
+		cfg.VolumeName = *volumeName
+	}
+	if *album != "" {
+		cfg.Album = *album
+	}
+
+	// Build the orientation detector once for the daemon's whole lifetime rather
+	// than per import.
+	detector, closeFn := newDetector(cfg)
+	if closeFn != nil {
+		defer closeFn()
+	}
+
+	runImport := func(ctx context.Context, volumePath string, obs pipeline.Observer) (pipeline.Summary, error) {
+		opts := pipeline.Options{
+			Observer:      obs,
+			Detector:      detector,
+			MinConfidence: cfg.OrientationMinConfidence,
+		}
+		p := pipeline.New(cfg, volumePath, video.New(cfg), photos.New(cfg.Album), opts)
+		return p.Run(ctx)
+	}
+
+	dopts := daemon.Options{Config: cfg, RunImport: runImport}
+	if !*noUnmount {
+		dopts.Unmount = volume.Unmount
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	fmt.Println("charmera daemon started; watching for the camera.")
+	if err := daemon.New(dopts).Run(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "daemon error: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func statusCmd() int {
+	st, err := daemon.Snapshot(config.Default())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println(st.Label())
+	return 0
+}
+
+func controlCmd(command string) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	st, err := daemon.SendCommand(ctx, config.Default(), command)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println(st.Label())
 	return 0
 }
 
