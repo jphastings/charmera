@@ -11,6 +11,7 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -50,7 +51,7 @@ func onReady() {
 	systray.AddSeparator()
 	pauseItem = systray.AddMenuItem("Pause importing", "Stop importing when the camera is plugged in")
 	systray.AddSeparator()
-	quitItem := systray.AddMenuItem("Quit Charmera", "Quit this menu; importing continues in the background")
+	quitItem := systray.AddMenuItem("Quit Charmera…", "Quit, optionally stopping the background importer")
 
 	ensureDaemonInstalled()
 	go connectLoop()
@@ -61,11 +62,55 @@ func onReady() {
 			case <-pauseItem.ClickedCh:
 				togglePause()
 			case <-quitItem.ClickedCh:
-				systray.Quit()
-				return
+				confirmQuit()
 			}
 		}
 	}()
+}
+
+// confirmQuit asks whether to leave the background importer running, then quits
+// accordingly. Dismissing the dialog leaves the app running.
+func confirmQuit() {
+	switch quitChoice() {
+	case quitStop:
+		_, _ = launchagent.Uninstall() // stop & don't relaunch at login
+		systray.Quit()
+	case quitKeep:
+		systray.Quit()
+	}
+}
+
+type quitDecision int
+
+const (
+	quitCancel quitDecision = iota
+	quitStop
+	quitKeep
+)
+
+// quitChoice shows a native two-button dialog via osascript. Plain `display
+// dialog` runs in the osascript process, so it needs no Automation permission.
+func quitChoice() quitDecision {
+	const script = `display dialog "Charmera watches for your camera and imports new photos in the background. Keep it running after you quit?" ` +
+		`with title "Quit Charmera" with icon note ` +
+		`buttons {"Quit & Stop watching", "Quit & Keep watching"} default button "Quit & Keep watching"`
+	out, err := exec.Command("osascript", "-e", script).CombinedOutput()
+	if err != nil {
+		return quitCancel // dialog dismissed, or osascript unavailable
+	}
+	return parseQuitOutput(string(out))
+}
+
+// parseQuitOutput maps osascript's "button returned:…" line to a decision.
+func parseQuitOutput(out string) quitDecision {
+	switch {
+	case strings.Contains(out, "Stop watching"):
+		return quitStop
+	case strings.Contains(out, "Keep watching"):
+		return quitKeep
+	default:
+		return quitCancel
+	}
 }
 
 // connectLoop keeps a live connection to the daemon, streaming state into the

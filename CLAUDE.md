@@ -55,6 +55,10 @@ The auto-import model is a **persistent daemon**, not a one-shot run per mount:
   setting is persisted to `StateDir/state.json` so it survives restarts.
 - The menu app does **no importing**; it just connects to the socket and renders
   `PrimaryLabel`/`DetailLabel`/`Progress`, and toggles pause.
+- **Quit** shows a two-button dialog (via plain `osascript display dialog`, which
+  needs no Automation permission). "Quit & Stop watching" uninstalls the daemon
+  LaunchAgent (so it won't relaunch at login); "Quit & Keep watching" just quits
+  the menu. Relaunching the app reinstalls the agent.
 - On first launch the menu app installs the daemon LaunchAgent pointing at the
   CLI bundled next to it (`Contents/Resources/charmera`).
 
