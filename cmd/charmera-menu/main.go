@@ -9,8 +9,10 @@ package main
 import (
 	"context"
 	_ "embed"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"fyne.io/systray"
@@ -24,9 +26,11 @@ import (
 var iconPNG []byte
 
 var (
-	cfg        = config.Default()
-	statusItem *systray.MenuItem
-	pauseItem  *systray.MenuItem
+	cfg         = config.Default()
+	primaryItem *systray.MenuItem
+	detailItem  *systray.MenuItem
+	progItem    *systray.MenuItem
+	pauseItem   *systray.MenuItem
 )
 
 func main() {
@@ -37,10 +41,14 @@ func onReady() {
 	systray.SetTemplateIcon(iconPNG, iconPNG)
 	systray.SetTooltip("Charmera")
 
-	statusItem = systray.AddMenuItem("Connecting…", "")
-	statusItem.Disable()
+	primaryItem = systray.AddMenuItem("Connecting…", "")
+	detailItem = systray.AddMenuItem("", "")
+	detailItem.Disable()
+	progItem = systray.AddMenuItem("", "")
+	progItem.Disable()
+	progItem.Hide()
 	systray.AddSeparator()
-	pauseItem = systray.AddMenuItem("Pause", "Stop importing when the camera is plugged in")
+	pauseItem = systray.AddMenuItem("Pause importing", "Stop importing when the camera is plugged in")
 	systray.AddSeparator()
 	quitItem := systray.AddMenuItem("Quit Charmera", "Quit this menu; importing continues in the background")
 
@@ -87,7 +95,22 @@ func streamStates(c *daemon.Client) {
 }
 
 func applyState(st daemon.State) {
-	statusItem.SetTitle(st.Label())
+	primaryItem.SetTitle(st.PrimaryLabel())
+
+	if detail := st.DetailLabel(); detail != "" {
+		detailItem.SetTitle(detail)
+		detailItem.Show()
+	} else {
+		detailItem.Hide()
+	}
+
+	if frac, show := st.Progress(); show {
+		progItem.SetTitle(progressBar(frac))
+		progItem.Show()
+	} else {
+		progItem.Hide()
+	}
+
 	if st.Paused {
 		pauseItem.SetTitle("Resume importing")
 		pauseItem.Check()
@@ -98,9 +121,26 @@ func applyState(st daemon.State) {
 }
 
 func setDisconnected() {
-	statusItem.SetTitle("Daemon not running")
+	primaryItem.SetTitle("Daemon not running")
+	detailItem.Hide()
+	progItem.Hide()
 	pauseItem.SetTitle("Pause importing")
 	pauseItem.Uncheck()
+}
+
+// progressBar renders a fixed-width text progress bar for a menu item, e.g.
+// "▰▰▰▰▱▱▱▱▱▱  40%".
+func progressBar(fraction float64) string {
+	const segments = 10
+	if fraction < 0 {
+		fraction = 0
+	}
+	if fraction > 1 {
+		fraction = 1
+	}
+	filled := int(fraction*segments + 0.5)
+	bar := strings.Repeat("▰", filled) + strings.Repeat("▱", segments-filled)
+	return fmt.Sprintf("%s  %d%%", bar, int(fraction*100+0.5))
 }
 
 func togglePause() {

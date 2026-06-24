@@ -3,14 +3,15 @@
 // and serves that state plus pause/resume control over a Unix-domain socket.
 //
 // The package is deliberately cgo-free and platform-agnostic: the cgo-heavy
-// import and unmount steps are injected (RunImport, Unmount), the same way the
-// pipeline keeps orientation detection behind an interface. This keeps the state
-// machine unit-testable on any platform with fakes.
+// import and unmount steps are injected (an Importer and Unmount funcs), the same
+// way the pipeline keeps orientation detection behind an interface. This keeps
+// the state machine unit-testable on any platform with fakes.
 package daemon
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -21,56 +22,92 @@ import (
 	"github.com/jphastings/charmera/internal/scan"
 )
 
-// defaultPoll is how often the daemon re-checks for a mounted camera. It also
-// re-evaluates immediately whenever the pause setting changes.
-const defaultPoll = 2 * time.Second
+const (
+	// defaultPoll is how often the daemon re-checks for a mounted camera. It also
+	// re-evaluates immediately whenever the pause setting changes.
+	defaultPoll = 2 * time.Second
+	// ejectWindow is how long after an import the result keeps showing once the
+	// camera has been unplugged.
+	ejectWindow = time.Hour
 
-// Options configures a Daemon. RunImport is required; the rest have defaults.
+	defaultUnmountRetries = 5
+	defaultUnmountBackoff = time.Second
+)
+
+// Importer plans and performs the import for a camera. It's injected by the CLI
+// (which owns the cgo-heavy video/photos/orientation wiring) so this package
+// stays cgo-free.
+type Importer interface {
+	// Plan reports which files are new (not already in Photos), changing nothing.
+	Plan(ctx context.Context, volumePath string) (pipeline.Plan, error)
+	// Execute fixes/converts and imports the planned files, emitting progress.
+	Execute(ctx context.Context, volumePath string, plan pipeline.Plan, obs pipeline.Observer) (pipeline.Summary, error)
+}
+
+// Options configures a Daemon. Config and Importer are required; the rest have
+// defaults.
 type Options struct {
-	Config config.Config
+	Config   config.Config
+	Importer Importer
 
-	// RunImport fixes/converts and imports the camera's media. It is injected by
-	// the CLI (which owns the cgo-heavy video/photos/orientation wiring) so this
-	// package stays cgo-free. The observer streams progress for live status.
-	RunImport func(ctx context.Context, volumePath string, obs pipeline.Observer) (pipeline.Summary, error)
-
-	// Unmount ejects the camera after a successful import. Optional; nil skips
-	// unmounting (used in tests, and honours the user's --no-unmount preference).
+	// Unmount ejects the camera after an import. Optional; nil skips unmounting
+	// (used in tests, and honours the user's --no-unmount preference).
 	Unmount func(volumePath string) error
+	// ForceUnmount is tried as a last resort when Unmount keeps being refused
+	// (e.g. the volume is briefly busy with Spotlight indexing). Optional.
+	ForceUnmount func(volumePath string) error
 
 	// Poll overrides the camera re-check interval (defaults to defaultPoll).
 	Poll time.Duration
+	// UnmountRetries / UnmountBackoff tune the eject retry loop.
+	UnmountRetries int
+	UnmountBackoff time.Duration
+	// Now is the clock, injectable for tests (defaults to time.Now).
+	Now func() time.Time
 }
 
 // Daemon holds the running state and its subscribers.
 type Daemon struct {
 	opts Options
 	poll time.Duration
+	now  func() time.Time
 
 	mu   sync.Mutex
 	cur  State
 	subs map[int]chan State
 	next int
 
-	// handled is the mount path of a camera whose import has already completed
-	// this mount session; it prevents re-importing a camera that stays mounted
-	// (e.g. when unmount is disabled or fails). Cleared when the camera leaves.
-	handled string
+	// Per-mount bookkeeping (only touched by the single watch goroutine):
+	plannedVol string        // mount path the cached plan is for
+	plan       pipeline.Plan // cached plan for plannedVol
+	handled    string        // mount path already imported this session
+	lastCount  int           // items imported in the most recent import
+	lastAt     time.Time     // when that import finished
 
 	wake chan struct{}
 }
 
 // New builds a Daemon, restoring the persisted pause setting.
 func New(opts Options) *Daemon {
-	if opts.RunImport == nil {
-		panic("daemon: RunImport is required")
+	if opts.Importer == nil {
+		panic("daemon: Importer is required")
 	}
 	if opts.Poll == 0 {
 		opts.Poll = defaultPoll
 	}
+	if opts.UnmountRetries == 0 {
+		opts.UnmountRetries = defaultUnmountRetries
+	}
+	if opts.UnmountBackoff == 0 {
+		opts.UnmountBackoff = defaultUnmountBackoff
+	}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
 	d := &Daemon{
 		opts: opts,
 		poll: opts.Poll,
+		now:  opts.Now,
 		subs: map[int]chan State{},
 		wake: make(chan struct{}, 1),
 	}
@@ -128,67 +165,117 @@ func (d *Daemon) watch(ctx context.Context) {
 func (d *Daemon) evaluate(ctx context.Context) {
 	volPath, found := scan.FindCamera(d.opts.Config)
 	if !found {
-		d.handled = ""
-		d.setStatus(StatusIdle, "", "")
+		d.onNoCamera()
 		return
 	}
-
 	volName := filepath.Base(volPath)
 
-	if d.isPaused() {
-		d.setStatus(StatusDetected, volName, "")
-		return
-	}
-	if d.handled == volPath {
-		d.setStatus(StatusDetected, volName, "")
-		return
+	// Plan once per mount and cache it: reused across polls and on resume, so we
+	// don't re-hash the whole card every couple of seconds (or while paused).
+	if d.plannedVol != volPath {
+		plan, err := d.opts.Importer.Plan(ctx, volPath)
+		if err != nil {
+			d.plannedVol = "" // retry the plan on the next poll
+			d.setError(volName, planErrorMessage(err))
+			return
+		}
+		d.plannedVol = volPath
+		d.plan = plan
+		d.handled = ""
 	}
 
+	if d.handled == volPath {
+		d.setImported(volName, d.lastCount)
+		return
+	}
+	if d.isPaused() {
+		d.setPending(volName, d.plan.Total())
+		return
+	}
 	d.importMedia(ctx, volPath, volName)
 }
 
-// importMedia runs one import for a freshly-detected camera, streaming progress
-// into the live state, then unmounts (if configured).
-func (d *Daemon) importMedia(ctx context.Context, volPath, volName string) {
-	d.setStatus(StatusImporting, volName, "importing…")
+// onNoCamera reflects an empty /Volumes: show the result of a recent import for
+// a while after the camera is unplugged, otherwise go idle.
+func (d *Daemon) onNoCamera() {
+	d.plannedVol = ""
+	d.handled = ""
+	d.plan = pipeline.Plan{}
+	if d.lastCount > 0 && d.now().Sub(d.lastAt) < ejectWindow {
+		d.setEjected(d.lastCount)
+		return
+	}
+	d.setIdle()
+}
 
+// importMedia runs the import for the freshly-detected camera using the cached
+// plan, streaming progress into the live state, then unmounts (if configured).
+func (d *Daemon) importMedia(ctx context.Context, volPath, volName string) {
+	d.handled = volPath // don't re-import this mount even if it lingers
+	total := d.plan.Total()
+
+	if total == 0 {
+		d.lastCount = 0
+		d.setImported(volName, 0)
+		d.tryUnmount(volPath, volName, 0)
+		return
+	}
+
+	d.setImporting(volName, total)
 	obs := func(e pipeline.Event) {
-		if detail := importDetail(e); detail != "" {
-			d.setDetail(detail)
+		if e.Phase == "fix" || e.Phase == "convert" {
+			d.incDone()
 		}
 	}
 
-	_, err := d.opts.RunImport(ctx, volPath, obs)
-	d.handled = volPath // don't re-import this mount even if it lingers
-
+	sum, err := d.opts.Importer.Execute(ctx, volPath, d.plan, obs)
 	if err != nil {
 		d.setError(volName, err.Error())
 		return
 	}
 
-	if d.opts.Unmount != nil {
-		if uerr := d.opts.Unmount(volPath); uerr == nil {
-			d.setStatus(StatusIdle, "", "")
-			return
-		}
-	}
-	d.setStatus(StatusDetected, volName, "")
+	d.lastCount = sum.Imported
+	d.lastAt = d.now()
+	d.setImported(volName, sum.Imported)
+	d.tryUnmount(volPath, volName, sum.Imported)
 }
 
-// importDetail maps a pipeline event to a short live-status string (empty for
-// events not worth surfacing to a glanceable menu).
-func importDetail(e pipeline.Event) string {
-	switch e.Phase {
-	case "import":
-		if e.Name == "" {
-			return "importing into Photos…"
-		}
-	case "fix":
-		return "fixing " + e.Name
-	case "convert":
-		return "converting " + e.Name
+// tryUnmount ejects the camera, retrying transient "busy" failures and falling
+// back to a forced unmount. On success the volume vanishes and the next poll
+// shows the ejected state; on persistent failure the import result is shown with
+// an "couldn't eject" note.
+func (d *Daemon) tryUnmount(volPath, volName string, count int) {
+	if d.opts.Unmount == nil {
+		return
 	}
-	return ""
+	if err := d.unmountWithRetry(volPath); err != nil {
+		d.setEjectFailed(volName, count)
+	}
+}
+
+func (d *Daemon) unmountWithRetry(volPath string) error {
+	var err error
+	for attempt := 0; attempt < d.opts.UnmountRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(d.opts.UnmountBackoff)
+		}
+		if err = d.opts.Unmount(volPath); err == nil {
+			return nil
+		}
+	}
+	if d.opts.ForceUnmount != nil {
+		if ferr := d.opts.ForceUnmount(volPath); ferr == nil {
+			return nil
+		}
+	}
+	return err
+}
+
+func planErrorMessage(err error) string {
+	if errors.Is(err, pipeline.ErrImporterUnavailable) {
+		return "waiting for Photos…"
+	}
+	return err.Error()
 }
 
 // --- pause setting (persisted) ---
@@ -227,26 +314,48 @@ func (d *Daemon) nudge() {
 
 // --- state updates + broadcast ---
 
-func (d *Daemon) setStatus(status Status, volume, detail string) {
+func (d *Daemon) setIdle() {
+	d.apply(func(s *State) { *s = State{Status: StatusIdle, Paused: s.Paused} })
+}
+
+func (d *Daemon) setPending(volume string, total int) {
 	d.apply(func(s *State) {
-		s.Status = status
-		s.Volume = volume
-		s.Detail = detail
-		s.Error = ""
+		*s = State{Status: StatusPending, Paused: s.Paused, Volume: volume, Total: total}
 	})
 }
 
-func (d *Daemon) setDetail(detail string) {
-	d.apply(func(s *State) { s.Detail = detail })
+func (d *Daemon) setImporting(volume string, total int) {
+	d.apply(func(s *State) {
+		*s = State{Status: StatusImporting, Paused: s.Paused, Volume: volume, Total: total}
+	})
+}
+
+func (d *Daemon) setImported(volume string, count int) {
+	d.apply(func(s *State) {
+		*s = State{Status: StatusImported, Paused: s.Paused, Volume: volume, Total: count, Done: count}
+	})
+}
+
+func (d *Daemon) setEjected(count int) {
+	d.apply(func(s *State) {
+		*s = State{Status: StatusEjected, Paused: s.Paused, Total: count, Done: count}
+	})
+}
+
+func (d *Daemon) setEjectFailed(volume string, count int) {
+	d.apply(func(s *State) {
+		*s = State{Status: StatusImported, Paused: s.Paused, Volume: volume, Total: count, Done: count, EjectFailed: true}
+	})
 }
 
 func (d *Daemon) setError(volume, msg string) {
 	d.apply(func(s *State) {
-		s.Status = StatusDetected
-		s.Volume = volume
-		s.Detail = ""
-		s.Error = msg
+		*s = State{Status: StatusPending, Paused: s.Paused, Volume: volume, Error: msg}
 	})
+}
+
+func (d *Daemon) incDone() {
+	d.apply(func(s *State) { s.Done++ })
 }
 
 // apply mutates the current state under the lock and broadcasts the result, but

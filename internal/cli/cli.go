@@ -228,19 +228,13 @@ func daemonCmd(args []string) int {
 		defer closeFn()
 	}
 
-	runImport := func(ctx context.Context, volumePath string, obs pipeline.Observer) (pipeline.Summary, error) {
-		opts := pipeline.Options{
-			Observer:      obs,
-			Detector:      detector,
-			MinConfidence: cfg.OrientationMinConfidence,
-		}
-		p := pipeline.New(cfg, volumePath, video.New(cfg), photos.New(cfg.Album), opts)
-		return p.Run(ctx)
+	dopts := daemon.Options{
+		Config:   cfg,
+		Importer: daemonImporter{cfg: cfg, detector: detector},
 	}
-
-	dopts := daemon.Options{Config: cfg, RunImport: runImport}
 	if !*noUnmount {
 		dopts.Unmount = volume.Unmount
+		dopts.ForceUnmount = volume.UnmountForce
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -260,7 +254,7 @@ func statusCmd() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Println(st.Label())
+	fmt.Println(statusLine(st))
 	return 0
 }
 
@@ -272,8 +266,15 @@ func controlCmd(command string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Println(st.Label())
+	fmt.Println(statusLine(st))
 	return 0
+}
+
+func statusLine(st daemon.State) string {
+	if detail := st.DetailLabel(); detail != "" {
+		return st.PrimaryLabel() + " — " + detail
+	}
+	return st.PrimaryLabel()
 }
 
 func uninstallCmd() int {

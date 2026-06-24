@@ -179,7 +179,9 @@ to `~/Library/Logs/charmera.*.log`.
 - **Video.** `ffmpeg` transcodes to H.264 (CRF 26) + AAC, stamping
   `creation_time` from the file's modification time (the embedded date is wrong).
 - **Unmount.** When finished, the camera volume is unmounted via the
-  DiskArbitration framework (`--no-unmount` to skip).
+  DiskArbitration framework so you can unplug it safely (`--no-unmount` to skip).
+  A freshly-mounted card is sometimes briefly busy (e.g. Spotlight indexing it),
+  so the eject is retried and, if needed, forced.
 - **Dedup (Photos is the source of truth).** Each camera file is hashed
   (SHA-256) and the first 16 hex chars are embedded in the imported filename.
   Before importing, charmera asks Photos for the album's existing filenames and

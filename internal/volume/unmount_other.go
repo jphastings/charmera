@@ -8,3 +8,8 @@ import "errors"
 func Unmount(volumePath string) error {
 	return errors.New("volume unmount is only supported on macOS")
 }
+
+// UnmountForce is only implemented on macOS.
+func UnmountForce(volumePath string) error {
+	return errors.New("volume unmount is only supported on macOS")
+}

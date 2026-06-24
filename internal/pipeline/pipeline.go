@@ -10,6 +10,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -106,16 +107,36 @@ type produced struct {
 	path string // location in the target directory
 }
 
-// Run executes the workflow and returns a summary.
-func (p *Pipeline) Run(ctx context.Context) (Summary, error) {
-	var sum Summary
+// ErrImporterUnavailable means Photos can't be driven right now (e.g. the app
+// isn't reachable / not yet authorised). It signals "nothing to do this time",
+// not a hard failure — callers can retry later.
+var ErrImporterUnavailable = errors.New("Photos import unavailable")
+
+// Plan is the set of new files for one camera, after deduping against the Photos
+// album. It is produced without changing anything, so it is safe to compute even
+// when paused (to show "N items to import").
+type Plan struct {
+	Files   []scan.File // new files that will be processed, in scan order
+	Scanned int         // total media files on the camera
+	Skipped int         // already in the album (or duplicate content within the scan)
+	Photos  int
+	Videos  int
+}
+
+// Total is the number of files that would be imported.
+func (p Plan) Total() int { return len(p.Files) }
+
+// Plan scans the camera and works out which files are new (not already in the
+// album), changing nothing.
+func (p *Pipeline) Plan(ctx context.Context) (Plan, error) {
+	var plan Plan
 
 	p.emit(Event{Phase: "scan", Detail: p.volumePath})
 	files, err := scan.Scan(p.cfg, p.volumePath)
 	if err != nil {
-		return sum, fmt.Errorf("scanning camera: %w", err)
+		return plan, fmt.Errorf("scanning camera: %w", err)
 	}
-	sum.Scanned = len(files)
+	plan.Scanned = len(files)
 
 	// Dedup is driven by Photos itself: the album's existing filenames carry the
 	// content-hash key. Deleting a photo from Photos therefore re-enables import.
@@ -123,14 +144,13 @@ func (p *Pipeline) Run(ctx context.Context) (Summary, error) {
 	if p.opts.importing() {
 		if err := p.importer.Available(); err != nil {
 			if !p.opts.DryRun {
-				p.emit(Event{Phase: "warn", Detail: "Photos import unavailable: " + err.Error()})
-				return sum, nil
+				return plan, fmt.Errorf("%w: %v", ErrImporterUnavailable, err)
 			}
 			p.emit(Event{Phase: "warn", Detail: "Photos unavailable; dedup disabled in preview"})
 		} else {
 			names, err := p.importer.AlbumFilenames(ctx)
 			if err != nil {
-				return sum, err
+				return plan, err
 			}
 			for _, n := range names {
 				if k, ok := keyFromName(n); ok {
@@ -141,47 +161,75 @@ func (p *Pipeline) Run(ctx context.Context) (Summary, error) {
 	}
 
 	ffmpegOK := p.converter.Available() == nil
-
-	// Determine where fixed files are written: a clean staging area when
-	// importing (removed afterwards), or the user's OutDir otherwise.
-	targetDir := p.opts.OutDir
-	if p.opts.importing() {
-		targetDir = p.cfg.StagingDir()
-	}
-	if !p.opts.DryRun {
-		if p.opts.importing() {
-			os.RemoveAll(targetDir) // discard any leftovers from a prior crash
-			defer os.RemoveAll(targetDir)
-		}
-		if err := os.MkdirAll(targetDir, 0o755); err != nil {
-			return sum, err
-		}
-	}
-
-	// Phase 1: fix/convert each new file into the target directory.
-	var items []produced
 	for _, f := range files {
 		if p.opts.importing() {
 			key := hashKey(f.Hash)
 			if seen[key] {
-				sum.Skipped++
+				plan.Skipped++
 				p.emit(Event{Phase: "skip", Name: f.Name, Detail: "already imported"})
 				continue
 			}
-			seen[key] = true // also dedups identical content within this run
+			seen[key] = true // also dedups identical content within this scan
 		}
-
 		if f.Kind == scan.Video && !ffmpegOK {
 			p.emit(Event{Phase: "warn", Name: f.Name, Detail: "ffmpeg unavailable; skipping video"})
 			continue
 		}
+		plan.Files = append(plan.Files, f)
+		if f.Kind == scan.Video {
+			plan.Videos++
+		} else {
+			plan.Photos++
+		}
+	}
+	return plan, nil
+}
 
-		if p.opts.DryRun {
+// Run plans and then executes the workflow, returning a summary.
+func (p *Pipeline) Run(ctx context.Context) (Summary, error) {
+	plan, err := p.Plan(ctx)
+	if errors.Is(err, ErrImporterUnavailable) {
+		p.emit(Event{Phase: "warn", Detail: err.Error()})
+		return Summary{Scanned: plan.Scanned}, nil
+	}
+	if err != nil {
+		return Summary{Scanned: plan.Scanned, Skipped: plan.Skipped}, err
+	}
+
+	if p.opts.DryRun {
+		sum := Summary{Scanned: plan.Scanned, Skipped: plan.Skipped}
+		for _, f := range plan.Files {
 			p.emit(Event{Phase: planPhase(f.Kind), Name: f.Name, Detail: "would " + planPhase(f.Kind)})
 			countProduced(&sum, f.Kind)
-			continue
 		}
+		p.emit(Event{Phase: "done"})
+		return sum, nil
+	}
 
+	return p.Execute(ctx, plan)
+}
+
+// Execute fixes/converts the planned files into the staging area (or OutDir) and
+// imports them into Photos (unless writing to OutDir). The camera is only read.
+// It emits a "fix"/"convert" event per file as progress.
+func (p *Pipeline) Execute(ctx context.Context, plan Plan) (Summary, error) {
+	sum := Summary{Scanned: plan.Scanned, Skipped: plan.Skipped}
+
+	// A clean staging area when importing (removed afterwards), or the user's
+	// OutDir otherwise.
+	targetDir := p.opts.OutDir
+	if p.opts.importing() {
+		targetDir = p.cfg.StagingDir()
+		os.RemoveAll(targetDir) // discard any leftovers from a prior crash
+		defer os.RemoveAll(targetDir)
+	}
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return sum, err
+	}
+
+	// Phase 1: fix/convert each new file into the target directory.
+	var items []produced
+	for _, f := range plan.Files {
 		path, err := p.process(ctx, f, targetDir)
 		if err != nil {
 			sum.Failed++
@@ -192,15 +240,14 @@ func (p *Pipeline) Run(ctx context.Context) (Summary, error) {
 		items = append(items, produced{file: f, path: path})
 	}
 
-	if p.opts.DryRun || len(items) == 0 {
-		p.emit(Event{Phase: "done"})
-		return sum, nil
-	}
-
 	// OutDir mode: the fixed files stay where they were written; nothing is
 	// imported.
 	if !p.opts.importing() {
 		p.emit(Event{Phase: "warn", Detail: fmt.Sprintf("import skipped; %d file(s) written to %s", len(items), targetDir)})
+		p.emit(Event{Phase: "done"})
+		return sum, nil
+	}
+	if len(items) == 0 {
 		p.emit(Event{Phase: "done"})
 		return sum, nil
 	}

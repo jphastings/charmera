@@ -31,13 +31,30 @@ The auto-import model is a **persistent daemon**, not a one-shot run per mount:
   cgo-heavy import and unmount are injected as `RunImport` / `Unmount` funcs (the
   CLI wires in the real ones). Keep it that way — it's what makes the state
   machine unit-testable with a fake camera on any platform.
+- On each detection the daemon **plans once** (`pipeline.Plan`: scan + dedup, no
+  changes) and caches the result for that mount, so it can show "N items to
+  import" — including while paused — without re-hashing the card every poll. If
+  not paused it then runs `pipeline.Execute`, which emits a per-file event the
+  daemon counts for the progress bar. (`Run` = `Plan` + `Execute`; the CLI's
+  one-shot path still uses `Run`.)
+- **State carries counts, not prose.** `Status` is one of idle / pending /
+  importing / imported / ejected; with `Total`/`Done`/`Paused`/`EjectFailed`,
+  `PrimaryLabel()` + `DetailLabel()` + `Progress()` derive everything shown. The
+  CLI `status` and the menu both render from these — one source of truth.
+- After an import the result is kept visible: `StatusEjected` persists for
+  `ejectWindow` (1h) after the camera is unplugged (gated on `now()`, which is
+  injectable for tests).
+- **Eject is retried.** A freshly-mounted card is often briefly busy (Spotlight),
+  so a normal unmount can be refused; the daemon retries with backoff and then
+  falls back to `volume.UnmountForce` (safe — the card is read-only). Persistent
+  failure surfaces as `EjectFailed` ("… — couldn't eject"). This is the fix for
+  the "didn't auto-eject" report; it was transient busy, not a held handle.
 - **IPC** is a Unix-domain socket (`StateDir/daemon.sock`), newline-delimited
   JSON: the daemon streams a `State` on every change (deduped — unchanged states
   aren't re-sent), clients send a `Command` (pause/resume/toggle). The pause
   setting is persisted to `StateDir/state.json` so it survives restarts.
-- The menu app does **no importing**; it just connects to the socket, shows
-  `State.Label()`, and toggles pause. `State.Label()` is the single source of
-  truth for the status wording (CLI `status` uses it too).
+- The menu app does **no importing**; it just connects to the socket and renders
+  `PrimaryLabel`/`DetailLabel`/`Progress`, and toggles pause.
 - On first launch the menu app installs the daemon LaunchAgent pointing at the
   CLI bundled next to it (`Contents/Resources/charmera`).
 

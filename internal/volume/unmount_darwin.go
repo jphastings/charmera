@@ -35,8 +35,10 @@ static void onUnmount(DADiskRef disk, DADissenterRef dissenter, void *context) {
 }
 
 // charmera_unmount unmounts the volume at path, returning NULL on success or a
-// malloc'd error string that the caller must free.
-static char *charmera_unmount(const char *path) {
+// malloc'd error string that the caller must free. When force is non-zero a
+// forced unmount is requested (used as a last resort when a normal unmount keeps
+// being refused as "busy" — safe here because the camera is only ever read).
+static char *charmera_unmount(const char *path, int force) {
 	DASessionRef session = DASessionCreate(kCFAllocatorDefault);
 	if (session == NULL) {
 		return strdup("could not create DiskArbitration session");
@@ -58,8 +60,9 @@ static char *charmera_unmount(const char *path) {
 
 	DASessionScheduleWithRunLoop(session, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
 
+	DADiskUnmountOptions opts = force ? kDADiskUnmountOptionForce : kDADiskUnmountOptionDefault;
 	unmountResult res = {0, NULL};
-	DADiskUnmount(disk, kDADiskUnmountOptionDefault, onUnmount, &res);
+	DADiskUnmount(disk, opts, onUnmount, &res);
 
 	SInt32 r;
 	do {
@@ -86,10 +89,25 @@ import (
 
 // Unmount unmounts the volume at volumePath using the DiskArbitration framework.
 func Unmount(volumePath string) error {
+	return unmount(volumePath, false)
+}
+
+// UnmountForce forcibly unmounts the volume at volumePath. Use only as a last
+// resort when a normal Unmount keeps being refused; it's safe here because the
+// camera is never written to.
+func UnmountForce(volumePath string) error {
+	return unmount(volumePath, true)
+}
+
+func unmount(volumePath string, force bool) error {
 	cPath := C.CString(volumePath)
 	defer C.free(unsafe.Pointer(cPath))
 
-	cErr := C.charmera_unmount(cPath)
+	cForce := C.int(0)
+	if force {
+		cForce = C.int(1)
+	}
+	cErr := C.charmera_unmount(cPath, cForce)
 	if cErr == nil {
 		return nil
 	}
