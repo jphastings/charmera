@@ -26,6 +26,10 @@ import (
 //go:embed icon.png
 var iconPNG []byte
 
+// permissionSettingsURL deep-links to Privacy & Security → Files & Folders, so
+// a user denied "Removable Volumes" access can jump straight to fixing it.
+const permissionSettingsURL = "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders"
+
 var (
 	cfg         = config.Default()
 	primaryItem *systray.MenuItem
@@ -37,6 +41,10 @@ var (
 	// calls applyBundleIcon when it changes. Initialised to something no real
 	// model equals, so the first received state always applies its icon.
 	lastModel = "\x00unset"
+
+	// needsPermission tracks whether detailItem is currently the (enabled)
+	// "Please provide permissions" row, so its click handler knows whether to act.
+	needsPermission bool
 )
 
 func main() {
@@ -69,6 +77,14 @@ func onReady() {
 			select {
 			case <-pauseItem.ClickedCh:
 				togglePause()
+			case <-detailItem.ClickedCh:
+				// The info rows are normally disabled (muted, inert-but-selectable is a
+				// UX trap) but this one is enabled while it reads "Please provide
+				// permissions"; guard on needsPermission since a disabled item's
+				// ClickedCh can still fire from clicks queued before it was disabled.
+				if needsPermission {
+					openPermissionSettings()
+				}
 			case <-quitItem.ClickedCh:
 				confirmQuit()
 			}
@@ -162,6 +178,16 @@ func applyState(st daemon.State) {
 		detailItem.Hide()
 	}
 
+	// The detail row is normally inert (disabled); make an exception when it's
+	// telling the user to fix a permissions problem, so they can click through
+	// to the right System Settings pane.
+	needsPermission = st.NeedsPermission
+	if needsPermission {
+		detailItem.Enable()
+	} else {
+		detailItem.Disable()
+	}
+
 	if frac, show := st.Progress(); show {
 		progItem.SetTitle(progressBar(frac))
 		progItem.Show()
@@ -181,6 +207,8 @@ func applyState(st daemon.State) {
 func setDisconnected() {
 	primaryItem.SetTitle("Daemon not running")
 	detailItem.Hide()
+	detailItem.Disable()
+	needsPermission = false
 	progItem.Hide()
 	pauseItem.SetTitle("Pause importing")
 	pauseItem.Uncheck()
@@ -199,6 +227,12 @@ func progressBar(fraction float64) string {
 	filled := int(fraction*segments + 0.5)
 	bar := strings.Repeat("▰", filled) + strings.Repeat("▱", segments-filled)
 	return fmt.Sprintf("%s  %d%%", bar, int(fraction*100+0.5))
+}
+
+// openPermissionSettings jumps the user straight to the Files & Folders pane
+// so they can grant the camera volume access the daemon was denied.
+func openPermissionSettings() {
+	_ = exec.Command("open", permissionSettingsURL).Start()
 }
 
 func togglePause() {

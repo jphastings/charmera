@@ -32,6 +32,9 @@ type State struct {
 	Done        int    `json:"done,omitempty"`         // items imported so far / in total
 	EjectFailed bool   `json:"eject_failed,omitempty"` // import done but the camera wouldn't eject
 	Error       string `json:"error,omitempty"`        // import/plan error, if any
+	// NeedsPermission: macOS denied access to the camera volume (TCC "Removable
+	// Volumes"); the user must grant it in System Settings.
+	NeedsPermission bool `json:"needs_permission,omitempty"`
 }
 
 // PrimaryLabel is the headline status line ("Charmera detected" etc.).
@@ -60,6 +63,9 @@ func (s State) DetailLabel() string {
 }
 
 func (s State) detailBase() string {
+	if s.NeedsPermission {
+		return "Please provide permissions"
+	}
 	if s.Error != "" {
 		return s.Error
 	}

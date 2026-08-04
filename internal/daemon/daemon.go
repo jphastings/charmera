@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -181,7 +182,13 @@ func (d *Daemon) evaluate(ctx context.Context) {
 
 		plan, err := d.opts.Importer.Plan(ctx, volPath)
 		if err != nil {
-			d.plannedVol = "" // retry the plan on the next poll
+			d.plannedVol = "" // retry the plan on the next poll, so it self-heals once access is granted
+			if errors.Is(err, fs.ErrPermission) {
+				// syscall.Errno maps both EPERM and EACCES to fs.ErrPermission, so this
+				// also matches the denied-access case, not just literal permission bits.
+				d.setNeedsPermission(volName)
+				return
+			}
 			d.setError(volName, planErrorMessage(err))
 			return
 		}
@@ -375,6 +382,12 @@ func (d *Daemon) setEjectFailed(volume string, count int) {
 func (d *Daemon) setError(volume, msg string) {
 	d.apply(func(s *State) {
 		*s = State{Status: StatusPending, Paused: s.Paused, Model: s.Model, Volume: volume, Error: msg}
+	})
+}
+
+func (d *Daemon) setNeedsPermission(volume string) {
+	d.apply(func(s *State) {
+		*s = State{Status: StatusPending, Paused: s.Paused, Model: s.Model, Volume: volume, NeedsPermission: true}
 	})
 }
 

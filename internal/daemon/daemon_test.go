@@ -2,9 +2,12 @@ package daemon
 
 import (
 	"context"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -32,6 +35,7 @@ func TestStateLabels(t *testing.T) {
 		{"eject failed", State{Status: StatusImported, Total: 4, Done: 4, EjectFailed: true}, "Charmera detected", "4 items imported — couldn't eject"},
 		{"ejected", State{Status: StatusEjected, Done: 7}, "Charmera ejected", "7 items imported"},
 		{"plan error", State{Status: StatusPending, Error: "waiting for Photos…"}, "Charmera detected", "waiting for Photos…"},
+		{"needs permission", State{Status: StatusPending, NeedsPermission: true}, "Charmera detected", "Please provide permissions"},
 	}
 	for _, c := range cases {
 		if got := c.state.PrimaryLabel(); got != c.primary {
@@ -90,6 +94,14 @@ func (f *fakeImporter) execCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.executed)
+}
+
+// setPlanErr changes the error Plan returns, so a test can simulate the user
+// fixing a problem (e.g. granting permission) partway through.
+func (f *fakeImporter) setPlanErr(err error) {
+	f.mu.Lock()
+	f.planErr = err
+	f.mu.Unlock()
 }
 
 type fakeClock struct {
@@ -347,6 +359,37 @@ func TestPlanErrorIsSurfacedAndRetried(t *testing.T) {
 	}
 	if imp.execCount() != 0 {
 		t.Errorf("a failed plan must not import, got %d", imp.execCount())
+	}
+}
+
+func TestPlanPermissionErrorSurfacesAsNeedsPermissionAndSelfHeals(t *testing.T) {
+	cfg := testConfig(t)
+	permErr := fmt.Errorf("scanning camera: %w", &fs.PathError{Op: "open", Path: "/Volumes/X/DCIM", Err: syscall.EPERM})
+	imp := &fakeImporter{planErr: permErr, planTotal: 1}
+	makeCamera(t, cfg.VolumesDir, "CAM")
+
+	d := New(Options{Config: cfg, Importer: imp, Poll: 5 * time.Millisecond})
+	startDaemon(t, d)
+
+	if !waitFor(time.Second, func() bool { return d.Snapshot().NeedsPermission }) {
+		t.Fatalf("expected NeedsPermission, got %+v", d.Snapshot())
+	}
+	if st := d.Snapshot(); st.Status != StatusPending {
+		t.Errorf("status = %v, want pending", st.Status)
+	}
+	if got := d.Snapshot().DetailLabel(); got != "Please provide permissions" {
+		t.Errorf("DetailLabel = %q, want %q", got, "Please provide permissions")
+	}
+	if imp.execCount() != 0 {
+		t.Errorf("a permission error must not import, got %d", imp.execCount())
+	}
+
+	imp.setPlanErr(nil) // simulate the user granting access in System Settings
+	if !waitFor(time.Second, func() bool { return imp.execCount() == 1 }) {
+		t.Fatalf("plan succeeding after access is granted should resume import, execCount=%d", imp.execCount())
+	}
+	if st := d.Snapshot(); st.NeedsPermission {
+		t.Errorf("NeedsPermission should clear once the plan succeeds, got %+v", st)
 	}
 }
 
