@@ -26,6 +26,7 @@ const (
 type State struct {
 	Status      Status `json:"status"`
 	Paused      bool   `json:"paused"`
+	Model       string `json:"model,omitempty"`        // last-seen camera's colour (from charmera.model on the card)
 	Volume      string `json:"volume,omitempty"`       // detected camera's volume name
 	Total       int    `json:"total,omitempty"`        // items in the current/most-recent import
 	Done        int    `json:"done,omitempty"`         // items imported so far / in total

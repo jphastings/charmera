@@ -49,6 +49,24 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 build_universal . "$APP/Contents/Resources/charmera" "$CLI_LDFLAGS"
 build_universal ./cmd/charmera-menu "$APP/Contents/MacOS/Charmera"
 
+# --- app icon (the .icns is the static yellow default; at runtime the menu
+# app overlays a Finder custom icon from Resources/icons to match the last-seen
+# camera, see cmd/charmera-menu/bundleicon.go) ---
+echo "building app icon"
+ICONSET="$DIST/Charmera.iconset"
+rm -rf "$ICONSET"
+mkdir -p "$ICONSET"
+for size in 16 32 128 256 512; do
+	double=$((size * 2))
+	sips -z "$size" "$size" img/yellow.png --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+	sips -z "$double" "$double" img/yellow.png --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns -o "$APP/Contents/Resources/Charmera.icns" "$ICONSET"
+rm -rf "$ICONSET"
+
+mkdir -p "$APP/Contents/Resources/icons"
+cp img/black.png img/blue.png img/grey.png img/red.png img/white.png img/yellow.png "$APP/Contents/Resources/icons/"
+
 cat >"$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -61,6 +79,8 @@ cat >"$APP/Contents/Info.plist" <<PLIST
 	<key>CFBundleIdentifier</key>
 	<string>${BUNDLE_ID}</string>
 	<key>CFBundleExecutable</key>
+	<string>Charmera</string>
+	<key>CFBundleIconFile</key>
 	<string>Charmera</string>
 	<key>CFBundleVersion</key>
 	<string>${SHORT_VERSION}</string>

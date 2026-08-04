@@ -128,6 +128,13 @@ charmera resume      # import on detection again
 `pause` is remembered across restarts. The menu-bar app is just a friendlier
 front-end for `status` and `pause`/`resume`.
 
+The Charmera comes in several colours, and Charmera.app's icon (as shown in
+Finder) can match yours: put a file named `charmera.model` at the root of the
+SD card containing the colour (`black`, `blue`, `grey`, `red`, `white` or
+`yellow`), and the icon switches to match whenever that camera is plugged in.
+Without it — or for an unrecognised colour — the icon defaults to yellow. The
+menu-bar glyph itself is unchanged.
+
 ## Auto-launch at login
 
 ```bash

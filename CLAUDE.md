@@ -108,6 +108,13 @@ The tool imports photos with none of these present; each degrades gracefully:
   above a confidence threshold. Rationale and class→EXIF mapping live in
   `internal/orient`.
 - **Unmount uses DiskArbitration via cgo** (`internal/volume`), not `diskutil`.
+- **The dynamic app icon is a Finder custom icon**, set via `NSWorkspace` from
+  the menu app (`cmd/charmera-menu/bundleicon.go`) to match the last-seen
+  camera's colour — not the menu-bar glyph, which stays fixed. This writes an
+  `Icon\r` file into the bundle root, so `codesign --verify --strict` flags it
+  after first use; harmless, since Gatekeeper only assesses at first launch.
+  An app update (a fresh `.app`) resets the icon to the default yellow until
+  the next camera is seen.
 
 ## Photos integration — read before touching it
 

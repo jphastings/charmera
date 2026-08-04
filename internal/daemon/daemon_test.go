@@ -361,6 +361,39 @@ func TestPausePersistsAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestModelReflectsLastSeenCameraAndPersists(t *testing.T) {
+	cfg := testConfig(t)
+	imp := &fakeImporter{planTotal: 1}
+	vol := makeCamera(t, cfg.VolumesDir, "CAM")
+	if err := os.WriteFile(filepath.Join(vol, "charmera.model"), []byte("Red\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	d := New(Options{Config: cfg, Importer: imp, Poll: 5 * time.Millisecond})
+	startDaemon(t, d)
+
+	if !waitFor(time.Second, func() bool { return d.Snapshot().Model == "red" }) {
+		t.Fatalf("expected Model to reflect charmera.model, got %+v", d.Snapshot())
+	}
+
+	if err := os.RemoveAll(vol); err != nil {
+		t.Fatal(err)
+	}
+	// No Unmount is configured, so the camera lingers as "imported" until we
+	// remove it ourselves; once gone, the recent import shows as ejected.
+	if !waitFor(time.Second, func() bool { return d.Snapshot().Status == StatusEjected }) {
+		t.Fatalf("expected ejected once the camera is gone, got %+v", d.Snapshot())
+	}
+	if got := d.Snapshot().Model; got != "red" {
+		t.Errorf("Model should still show the last-seen colour after unplugging, got %q", got)
+	}
+
+	d2 := New(Options{Config: cfg, Importer: imp})
+	if got := d2.Snapshot().Model; got != "red" {
+		t.Errorf("Model did not persist to a fresh daemon, got %q", got)
+	}
+}
+
 func TestSocketStreamsStateAndAcceptsCommands(t *testing.T) {
 	cfg := testConfig(t) // empty VolumesDir: stays idle, never imports
 	imp := &fakeImporter{}

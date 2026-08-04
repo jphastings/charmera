@@ -111,7 +111,8 @@ func New(opts Options) *Daemon {
 		subs: map[int]chan State{},
 		wake: make(chan struct{}, 1),
 	}
-	d.cur = State{Status: StatusIdle, Paused: loadPaused(opts.Config)}
+	p := loadPersisted(opts.Config)
+	d.cur = State{Status: StatusIdle, Paused: p.Paused, Model: p.Model}
 	return d
 }
 
@@ -173,6 +174,11 @@ func (d *Daemon) evaluate(ctx context.Context) {
 	// Plan once per mount and cache it: reused across polls and on resume, so we
 	// don't re-hash the whole card every couple of seconds (or while paused).
 	if d.plannedVol != volPath {
+		// Read the model before planning so the icon updates even if planning
+		// then errors. A card with no charmera.model clears it to "": the last
+		// seen camera's colour is unknown, so the menu falls back to yellow.
+		d.setModel(scan.ReadModel(volPath))
+
 		plan, err := d.opts.Importer.Plan(ctx, volPath)
 		if err != nil {
 			d.plannedVol = "" // retry the plan on the next poll
@@ -297,8 +303,26 @@ func (d *Daemon) SetPaused(paused bool) {
 		}
 	})
 	if changed {
-		savePaused(d.opts.Config, paused)
+		s := d.Snapshot()
+		savePersisted(d.opts.Config, persisted{Paused: s.Paused, Model: s.Model})
 		d.nudge()
+	}
+}
+
+// setModel records the last-seen camera's colour and persists it when it
+// actually changed, so a fresh daemon restores the last colour even with no
+// camera plugged in.
+func (d *Daemon) setModel(model string) {
+	changed := false
+	d.apply(func(s *State) {
+		if s.Model != model {
+			s.Model = model
+			changed = true
+		}
+	})
+	if changed {
+		s := d.Snapshot()
+		savePersisted(d.opts.Config, persisted{Paused: s.Paused, Model: s.Model})
 	}
 }
 
@@ -315,42 +339,42 @@ func (d *Daemon) nudge() {
 // --- state updates + broadcast ---
 
 func (d *Daemon) setIdle() {
-	d.apply(func(s *State) { *s = State{Status: StatusIdle, Paused: s.Paused} })
+	d.apply(func(s *State) { *s = State{Status: StatusIdle, Paused: s.Paused, Model: s.Model} })
 }
 
 func (d *Daemon) setPending(volume string, total int) {
 	d.apply(func(s *State) {
-		*s = State{Status: StatusPending, Paused: s.Paused, Volume: volume, Total: total}
+		*s = State{Status: StatusPending, Paused: s.Paused, Model: s.Model, Volume: volume, Total: total}
 	})
 }
 
 func (d *Daemon) setImporting(volume string, total int) {
 	d.apply(func(s *State) {
-		*s = State{Status: StatusImporting, Paused: s.Paused, Volume: volume, Total: total}
+		*s = State{Status: StatusImporting, Paused: s.Paused, Model: s.Model, Volume: volume, Total: total}
 	})
 }
 
 func (d *Daemon) setImported(volume string, count int) {
 	d.apply(func(s *State) {
-		*s = State{Status: StatusImported, Paused: s.Paused, Volume: volume, Total: count, Done: count}
+		*s = State{Status: StatusImported, Paused: s.Paused, Model: s.Model, Volume: volume, Total: count, Done: count}
 	})
 }
 
 func (d *Daemon) setEjected(count int) {
 	d.apply(func(s *State) {
-		*s = State{Status: StatusEjected, Paused: s.Paused, Total: count, Done: count}
+		*s = State{Status: StatusEjected, Paused: s.Paused, Model: s.Model, Total: count, Done: count}
 	})
 }
 
 func (d *Daemon) setEjectFailed(volume string, count int) {
 	d.apply(func(s *State) {
-		*s = State{Status: StatusImported, Paused: s.Paused, Volume: volume, Total: count, Done: count, EjectFailed: true}
+		*s = State{Status: StatusImported, Paused: s.Paused, Model: s.Model, Volume: volume, Total: count, Done: count, EjectFailed: true}
 	})
 }
 
 func (d *Daemon) setError(volume, msg string) {
 	d.apply(func(s *State) {
-		*s = State{Status: StatusPending, Paused: s.Paused, Volume: volume, Error: msg}
+		*s = State{Status: StatusPending, Paused: s.Paused, Model: s.Model, Volume: volume, Error: msg}
 	})
 }
 
@@ -413,27 +437,28 @@ func (d *Daemon) broadcast(s State) {
 	}
 }
 
-// --- pause persistence ---
+// --- persisted settings (pause + last-seen camera model) ---
 
 type persisted struct {
-	Paused bool `json:"paused"`
+	Paused bool   `json:"paused"`
+	Model  string `json:"model,omitempty"`
 }
 
-func loadPaused(cfg config.Config) bool {
+func loadPersisted(cfg config.Config) persisted {
 	data, err := os.ReadFile(cfg.StatePath())
 	if err != nil {
-		return false
+		return persisted{}
 	}
 	var p persisted
 	if json.Unmarshal(data, &p) != nil {
-		return false
+		return persisted{}
 	}
-	return p.Paused
+	return p
 }
 
-func savePaused(cfg config.Config, paused bool) {
+func savePersisted(cfg config.Config, p persisted) {
 	_ = os.MkdirAll(filepath.Dir(cfg.StatePath()), 0o755)
-	data, err := json.Marshal(persisted{Paused: paused})
+	data, err := json.Marshal(p)
 	if err != nil {
 		return
 	}

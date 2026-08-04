@@ -32,6 +32,11 @@ var (
 	detailItem  *systray.MenuItem
 	progItem    *systray.MenuItem
 	pauseItem   *systray.MenuItem
+
+	// lastModel is the colour last applied to the bundle icon, so applyState only
+	// calls applyBundleIcon when it changes. Initialised to something no real
+	// model equals, so the first received state always applies its icon.
+	lastModel = "\x00unset"
 )
 
 func main() {
@@ -42,7 +47,10 @@ func onReady() {
 	systray.SetTemplateIcon(iconPNG, iconPNG)
 	systray.SetTooltip("Charmera")
 
+	// Both info lines are disabled (muted): systray only makes an item
+	// unselectable by disabling it, and an inert-but-selectable line is a UX trap.
 	primaryItem = systray.AddMenuItem("Connecting…", "")
+	primaryItem.Disable()
 	detailItem = systray.AddMenuItem("", "")
 	detailItem.Disable()
 	progItem = systray.AddMenuItem("", "")
@@ -140,6 +148,11 @@ func streamStates(c *daemon.Client) {
 }
 
 func applyState(st daemon.State) {
+	if st.Model != lastModel {
+		lastModel = st.Model
+		applyBundleIcon(st.Model)
+	}
+
 	primaryItem.SetTitle(st.PrimaryLabel())
 
 	if detail := st.DetailLabel(); detail != "" {
